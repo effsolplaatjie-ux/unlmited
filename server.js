@@ -5,97 +5,63 @@ const cors = require('cors');
 const twilio = require('twilio');
 
 const app = express();
-app.use(cors());
+
+// --- 1. FIX CORS POLICY ---
+app.use(cors({
+    origin: '*', // Allows requests from any location
+    methods: ['GET', 'POST', 'PUT', 'DELETE'],
+    allowedHeaders: ['Content-Type']
+}));
+
 app.use(express.json());
 
-// ==========================================
-// DATABASE CONNECTION (With SSL for Cloud/TiDB)
-// ==========================================
-const dbConfig = {
+// --- 2. IMPROVED DATABASE CONNECTION ---
+const pool = mysql.createPool({
     host: process.env.DB_HOST,
     user: process.env.DB_USER,
     password: process.env.DB_PASSWORD,
     database: process.env.DB_NAME,
     port: process.env.DB_PORT || 4000,
-    ssl: {
-        rejectUnauthorized: false // REQUIRED for TiDB and Render connections
-    },
+    ssl: { rejectUnauthorized: false },
     waitForConnections: true,
-    connectionLimit: 10
-};
+    connectionLimit: 10,
+    enableKeepAlive: true, // Keeps connection from dying
+    keepAliveInitialDelay: 10000
+});
 
-const pool = mysql.createPool(dbConfig);
+const twilioClient = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
 
-// DATABASE TESTER: This will print the exact error to your Render logs
-pool.getConnection()
-    .then(conn => {
-        console.log("✅ Database Connected Successfully!");
-        conn.release();
-    })
-    .catch(err => {
-        console.error("❌ DATABASE CONNECTION FAILED:", err.message);
-    });
+// --- 3. UPDATED ROUTES ---
 
-const twilioClient = twilio(
-    process.env.TWILIO_ACCOUNT_SID, 
-    process.env.TWILIO_AUTH_TOKEN
-);
-
-// Helper: Send SMS
-const sendSMS = async (to, message) => {
-    try {
-        await twilioClient.messages.create({
-            body: message,
-            from: process.env.TWILIO_PHONE_NUMBER,
-            to: to
-        });
-        console.log(`SMS sent to ${to}`);
-    } catch (err) {
-        console.error("Twilio Error:", err.message);
-    }
-};
-
-// ==========================================
-// 1. AUTHENTICATION
-// ==========================================
-
+// Login
 app.post('/api/login', async (req, res) => {
     const { username, password } = req.body;
     try {
-        const [rows] = await pool.query('SELECT * FROM users WHERE username = ? AND password = ?', [username, password]);
-        if (rows.length > 0) {
-            const { password, ...user } = rows[0];
-            res.json({ success: true, user });
-        } else {
-            res.status(401).json({ success: false, message: 'Invalid credentials' });
-        }
-    } catch (err) {
-        res.status(500).json({ success: false, error: "Database error during login" });
-    }
+        const [rows] = await pool.query('SELECT id, username, role FROM users WHERE username = ? AND password = ?', [username, password]);
+        if (rows.length > 0) return res.json({ success: true, user: rows[0] });
+        res.status(401).json({ success: false, message: 'Invalid credentials' });
+    } catch (err) { res.status(500).json({ success: false, error: err.message }); }
 });
 
-// ==========================================
-// 2. POLICY MANAGEMENT
-// ==========================================
-
+// Create Policy + SMS Notification
 app.post('/api/policies', async (req, res) => {
     const { client_name, client_phone, insurance_type } = req.body;
     const policy_number = `UFS-${Date.now()}`;
-
     try {
-        await pool.query(
-            'INSERT INTO policies (policy_number, client_name, client_phone, insurance_type) VALUES (?, ?, ?, ?)',
-            [policy_number, client_name, client_phone, insurance_type]
-        );
+        await pool.query('INSERT INTO policies (policy_number, client_name, client_phone, insurance_type) VALUES (?, ?, ?, ?)', [policy_number, client_name, client_phone, insurance_type]);
         
-        await sendSMS(client_phone, `Unlimited Funeral Services: Your ${insurance_type} policy is active. No: ${policy_number}`);
-        
+        // SMS Notification
+        await twilioClient.messages.create({
+            body: `UFS: Hello ${client_name}, your ${insurance_type} policy is active. No: ${policy_number}`,
+            from: process.env.TWILIO_PHONE_NUMBER,
+            to: client_phone
+        });
+
         res.json({ success: true, policy_number });
-    } catch (err) {
-        res.status(500).json({ success: false, error: "Failed to create policy" });
-    }
+    } catch (err) { res.status(500).json({ success: false, error: err.message }); }
 });
 
+// Get Policies
 app.get('/api/policies', async (req, res) => {
     const { search } = req.query;
     try {
@@ -107,32 +73,21 @@ app.get('/api/policies', async (req, res) => {
         }
         const [rows] = await pool.query(sql + ' ORDER BY created_at DESC', params);
         res.json({ success: true, data: rows });
-    } catch (err) {
-        res.status(500).json({ success: false, error: "Failed to fetch policies" });
-    }
+    } catch (err) { res.status(500).json({ success: false, error: err.message }); }
 });
 
-// NEW: Manual Payment Reminder API
+// Manual Reminder
 app.post('/api/policies/remind', async (req, res) => {
     const { phone, name } = req.body;
     try {
-        const msg = `Dear ${name}, this is a payment reminder from Unlimited Funeral Services. Please ensure your policy remains up to date.`;
-        await sendSMS(phone, msg);
-        res.json({ success: true, message: "Reminder sent!" });
-    } catch (err) {
-        res.status(500).json({ success: false, error: "Failed to send reminder" });
-    }
-});
-
-app.put('/api/policies/:id/status', async (req, res) => {
-    const { status } = req.body;
-    try {
-        await pool.query('UPDATE policies SET status = ? WHERE id = ?', [status, req.params.id]);
+        await twilioClient.messages.create({
+            body: `UFS Reminder: Dear ${name}, please settle your policy payment to stay covered.`,
+            from: process.env.TWILIO_PHONE_NUMBER,
+            to: phone
+        });
         res.json({ success: true });
-    } catch (err) {
-        res.status(500).json({ success: false });
-    }
+    } catch (err) { res.status(500).json({ success: false, error: err.message }); }
 });
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`Server LIVE on port ${PORT}`));
+app.listen(PORT, () => console.log(`Server LIVE`));
