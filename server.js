@@ -6,35 +6,34 @@ const twilio = require('twilio');
 
 const app = express();
 app.use(cors());
-app.use(express.json()); // Parse JSON bodies
+app.use(express.json());
 
-// Initialize Twilio Client
-const twilioClient = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
-
-// Database Connection Pool (Compatible with TiDB and MySQL)
+// ==========================================
+// CONFIGURATION & DATABASE CONNECTION
+// ==========================================
 const pool = mysql.createPool({
     host: process.env.DB_HOST,
     user: process.env.DB_USER,
     password: process.env.DB_PASSWORD,
     database: process.env.DB_NAME,
-    port: process.env.DB_PORT,
+    port: process.env.DB_PORT || 4000, // TiDB Default
     waitForConnections: true,
-    connectionLimit: 10,
-    queueLimit: 0
+    connectionLimit: 10
 });
 
-// ==========================================
-// UTILITY FUNCTIONS
-// ==========================================
+const twilioClient = twilio(
+    process.env.TWILIO_ACCOUNT_SID, 
+    process.env.TWILIO_AUTH_TOKEN
+);
 
-// Generate Unique Policy Number (Format: UFS-YYYYMMDD-XXXX)
+// Helper: Generate Unique Policy Number
 const generatePolicyNumber = () => {
-    const date = new Date().toISOString().slice(0, 10).replace(/-/g, '');
-    const random = Math.floor(1000 + Math.random() * 9000);
-    return `UFS-${date}-${random}`;
+    const year = new Date().getFullYear();
+    const random = Math.floor(100000 + Math.random() * 900000);
+    return `UFS-${year}-${random}`;
 };
 
-// Send SMS Helper
+// Helper: Send SMS
 const sendSMS = async (to, message) => {
     try {
         await twilioClient.messages.create({
@@ -42,24 +41,26 @@ const sendSMS = async (to, message) => {
             from: process.env.TWILIO_PHONE_NUMBER,
             to: to
         });
-        console.log(`SMS sent to ${to}`);
-    } catch (error) {
-        console.error('Failed to send SMS:', error.message);
-        // We don't throw here to prevent the main API calls from failing if the SMS API is down
+    } catch (err) {
+        console.error("SMS Error:", err.message);
     }
 };
 
 // ==========================================
-// API ENDPOINTS
+// 1. AUTHENTICATION & STAFF MANAGEMENT
 // ==========================================
 
-// 1. Authentication: Login (Admin & Employees)
+// Login (Feature 7)
 app.post('/api/login', async (req, res) => {
     const { username, password } = req.body;
     try {
-        const [rows] = await pool.query('SELECT * FROM users WHERE username = ? AND password = ?', [username, password]);
+        const [rows] = await pool.query(
+            'SELECT * FROM users WHERE username = ? AND password = ?', 
+            [username, password]
+        );
         if (rows.length > 0) {
-            res.json({ success: true, user: { id: rows[0].id, username: rows[0].username, role: rows[0].role } });
+            const { password, ...userWithoutPassword } = rows[0];
+            res.json({ success: true, user: userWithoutPassword });
         } else {
             res.status(401).json({ success: false, message: 'Invalid credentials' });
         }
@@ -68,90 +69,81 @@ app.post('/api/login', async (req, res) => {
     }
 });
 
-// 2. Add Employee/Staff (Admin only feature conceptually)
+// Add Staff/Employee (Feature 2)
 app.post('/api/employees', async (req, res) => {
     const { username, password } = req.body;
     try {
-        const [result] = await pool.query('INSERT INTO users (username, password, role) VALUES (?, ?, ?)', [username, password, 'employee']);
-        res.status(201).json({ success: true, message: 'Employee added successfully', employeeId: result.insertId });
+        await pool.query(
+            'INSERT INTO users (username, password, role) VALUES (?, ?, "employee")', 
+            [username, password]
+        );
+        res.json({ success: true, message: 'Staff member added successfully' });
     } catch (err) {
-        res.status(500).json({ error: err.message });
+        res.status(500).json({ error: 'Username might already exist' });
     }
 });
 
-// 3, 4 & 7. Create Policy / Online Form Submission (Auto-generates Number, Sends SMS)
+// ==========================================
+// 2. POLICY MANAGEMENT
+// ==========================================
+
+// Create Policy (Feature 3, 4, 7 & SMS Notification)
 app.post('/api/policies', async (req, res) => {
     const { client_name, client_phone, insurance_type } = req.body;
     const policy_number = generatePolicyNumber();
 
     try {
-        const [result] = await pool.query(
-            'INSERT INTO policies (policy_number, client_name, client_phone, insurance_type, status) VALUES (?, ?, ?, ?, ?)',
-            [policy_number, client_name, client_phone, insurance_type, 'unpaid']
+        await pool.query(
+            'INSERT INTO policies (policy_number, client_name, client_phone, insurance_type) VALUES (?, ?, ?, ?)',
+            [policy_number, client_name, client_phone, insurance_type]
         );
 
-        // Notify client that policy is opened/captured
-        const message = `Welcome to Unlimited Funeral Services. Your policy (${insurance_type}) has been successfully captured. Policy Number: ${policy_number}.`;
-        await sendSMS(client_phone, message);
+        // Notify client (Feature 1)
+        const msg = `Unlimited Funeral Services: Your ${insurance_type} policy is now active. Policy No: ${policy_number}.`;
+        await sendSMS(client_phone, msg);
 
-        res.status(201).json({ 
-            success: true, 
-            message: 'Policy created successfully', 
-            policy_number: policy_number 
-        });
+        res.json({ success: true, policy_number });
     } catch (err) {
         res.status(500).json({ error: err.message });
     }
 });
 
-// 5. Search & List Policies
+// Search/List Policies (Feature 5)
 app.get('/api/policies', async (req, res) => {
     const { search } = req.query;
     try {
-        let query = 'SELECT * FROM policies ORDER BY created_at DESC';
+        let sql = 'SELECT * FROM policies';
         let params = [];
-
+        
         if (search) {
-            query = 'SELECT * FROM policies WHERE policy_number LIKE ? OR client_name LIKE ? ORDER BY created_at DESC';
+            sql += ' WHERE policy_number LIKE ? OR client_name LIKE ?';
             params = [`%${search}%`, `%${search}%`];
         }
-
-        const [rows] = await pool.query(query, params);
+        
+        sql += ' ORDER BY created_at DESC';
+        const [rows] = await pool.query(sql, params);
         res.json({ success: true, data: rows });
     } catch (err) {
         res.status(500).json({ error: err.message });
     }
 });
 
-// 6 & 1. Toggle Policy Status (Paid/Unpaid) & Notify on Missed Payment
+// Toggle Paid/Unpaid (Feature 1 & 6)
 app.put('/api/policies/:id/status', async (req, res) => {
-    const policyId = req.params.id;
     const { status } = req.body; // 'paid' or 'unpaid'
-
-    if (!['paid', 'unpaid'].includes(status)) {
-        return res.status(400).json({ error: 'Invalid status. Must be paid or unpaid.' });
-    }
+    const { id } = req.params;
 
     try {
-        // Update the status
-        await pool.query('UPDATE policies SET status = ? WHERE id = ?', [status, policyId]);
+        await pool.query('UPDATE policies SET status = ? WHERE id = ?', [status, id]);
 
-        // Fetch policy details to send SMS if necessary
-        const [rows] = await pool.query('SELECT client_phone, client_name, policy_number FROM policies WHERE id = ?', [policyId]);
-        
-        if (rows.length > 0) {
-            const policy = rows[0];
-
-            // If status is toggled to unpaid, it triggers a missed payment notification
-            if (status === 'unpaid') {
-                const msg = `Dear ${policy.client_name}, this is a notice from Unlimited Funeral Services that your policy (${policy.policy_number}) currently reflects a missed payment. Please contact us to update your account.`;
-                await sendSMS(policy.client_phone, msg);
+        // If marked unpaid, notify of missed payment (Feature 1)
+        if (status === 'unpaid') {
+            const [rows] = await pool.query('SELECT client_phone FROM policies WHERE id = ?', [id]);
+            if (rows.length > 0) {
+                await sendSMS(rows[0].client_phone, "Unlimited Funeral Services: Your policy payment is overdue. Please settle to avoid lapse.");
             }
-            
-            res.json({ success: true, message: `Policy status updated to ${status}` });
-        } else {
-            res.status(404).json({ error: 'Policy not found' });
         }
+        res.json({ success: true, message: `Status updated to ${status}` });
     } catch (err) {
         res.status(500).json({ error: err.message });
     }
@@ -161,6 +153,4 @@ app.put('/api/policies/:id/status', async (req, res) => {
 // START SERVER
 // ==========================================
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-    console.log(`Unlimited Funeral Services Backend running on port ${PORT}`);
-});
+app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
