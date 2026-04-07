@@ -101,14 +101,20 @@ app.get('/api/policies', async (req, res) => {
     try {
         let sql = 'SELECT * FROM policies';
         let params = [];
-        if (search) {
+        
+        if (search && search.trim() !== "") {
             sql += ' WHERE policy_number LIKE ? OR client_name LIKE ?';
             params = [`%${search}%`, `%${search}%`];
         }
-        const [rows] = await pool.query(sql + ' ORDER BY created_at DESC', params);
-        res.json({ success: true, data: rows });
+        
+        sql += ' ORDER BY created_at DESC';
+        const [rows] = await pool.query(sql, params);
+        
+        // Wrap the rows in a 'data' object for the frontend
+        res.json({ success: true, data: rows }); 
     } catch (err) {
-        res.status(500).json({ success: false, error: "Failed to fetch policies" });
+        console.error("Backend GET Error:", err);
+        res.status(500).json({ success: false, error: err.message });
     }
 });
 
