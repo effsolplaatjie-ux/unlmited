@@ -6,77 +6,76 @@ const twilio = require('twilio');
 
 const app = express();
 
-// --- 1. FIX CORS POLICY ---
+// --- FIX CORS POLICY ---
 app.use(cors({
-    origin: '*', // Allows requests from any location
+    origin: '*', 
     methods: ['GET', 'POST', 'PUT', 'DELETE'],
     allowedHeaders: ['Content-Type']
 }));
 
 app.use(express.json());
 
-// --- 2. IMPROVED DATABASE CONNECTION ---
+// --- DATABASE WITH SSL & KEEPALIVE ---
 const pool = mysql.createPool({
     host: process.env.DB_HOST,
     user: process.env.DB_USER,
     password: process.env.DB_PASSWORD,
     database: process.env.DB_NAME,
     port: process.env.DB_PORT || 4000,
-    ssl: { rejectUnauthorized: false },
-    waitForConnections: true,
-    connectionLimit: 10,
-    enableKeepAlive: true, // Keeps connection from dying
-    keepAliveInitialDelay: 10000
+    ssl: { rejectUnauthorized: false }, // Critical for Cloud DBs
+    enableKeepAlive: true
 });
 
 const twilioClient = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
 
-// --- 3. UPDATED ROUTES ---
+// --- ROUTES ---
 
-// Login
+// 1. Login
 app.post('/api/login', async (req, res) => {
     const { username, password } = req.body;
     try {
         const [rows] = await pool.query('SELECT id, username, role FROM users WHERE username = ? AND password = ?', [username, password]);
         if (rows.length > 0) return res.json({ success: true, user: rows[0] });
         res.status(401).json({ success: false, message: 'Invalid credentials' });
-    } catch (err) { res.status(500).json({ success: false, error: err.message }); }
+    } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// Create Policy + SMS Notification
+// 2. Add Employee (Fixes your 404 error)
+app.post('/api/employees', async (req, res) => {
+    const { username, password } = req.body;
+    try {
+        await pool.query('INSERT INTO users (username, password, role) VALUES (?, ?, "employee")', [username, password]);
+        res.json({ success: true });
+    } catch (err) { res.status(500).json({ error: "Username already exists" }); }
+});
+
+// 3. Create Policy + SMS Notification
 app.post('/api/policies', async (req, res) => {
     const { client_name, client_phone, insurance_type } = req.body;
     const policy_number = `UFS-${Date.now()}`;
     try {
-        await pool.query('INSERT INTO policies (policy_number, client_name, client_phone, insurance_type) VALUES (?, ?, ?, ?)', [policy_number, client_name, client_phone, insurance_type]);
+        await pool.query('INSERT INTO policies (policy_number, client_name, client_phone, insurance_type) VALUES (?, ?, ?, ?)', 
+            [policy_number, client_name, client_phone, insurance_type]);
         
-        // SMS Notification
+        // Notify Client
         await twilioClient.messages.create({
-            body: `UFS: Hello ${client_name}, your ${insurance_type} policy is active. No: ${policy_number}`,
+            body: `UFS: Hello ${client_name}, your policy is active. No: ${policy_number}`,
             from: process.env.TWILIO_PHONE_NUMBER,
             to: client_phone
         });
-
         res.json({ success: true, policy_number });
-    } catch (err) { res.status(500).json({ success: false, error: err.message }); }
+    } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// Get Policies
+// 4. Get Policies
 app.get('/api/policies', async (req, res) => {
-    const { search } = req.query;
     try {
-        let sql = 'SELECT * FROM policies';
-        let params = [];
-        if (search) {
-            sql += ' WHERE policy_number LIKE ? OR client_name LIKE ?';
-            params = [`%${search}%`, `%${search}%`];
-        }
-        const [rows] = await pool.query(sql + ' ORDER BY created_at DESC', params);
+        const [rows] = await pool.query('SELECT * FROM policies ORDER BY created_at DESC');
         res.json({ success: true, data: rows });
-    } catch (err) { res.status(500).json({ success: false, error: err.message }); }
+    } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// Manual Reminder
+// 5. Manual Payment Reminder
 app.post('/api/policies/remind', async (req, res) => {
     const { phone, name } = req.body;
     try {
@@ -86,8 +85,7 @@ app.post('/api/policies/remind', async (req, res) => {
             to: phone
         });
         res.json({ success: true });
-    } catch (err) { res.status(500).json({ success: false, error: err.message }); }
+    } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`Server LIVE`));
+app.listen(process.env.PORT || 3000, () => console.log("Server Running"));
