@@ -101,20 +101,14 @@ app.get('/api/policies', async (req, res) => {
     try {
         let sql = 'SELECT * FROM policies';
         let params = [];
-        
-        if (search && search.trim() !== "") {
+        if (search) {
             sql += ' WHERE policy_number LIKE ? OR client_name LIKE ?';
             params = [`%${search}%`, `%${search}%`];
         }
-        
-        sql += ' ORDER BY created_at DESC';
-        const [rows] = await pool.query(sql, params);
-        
-        // Wrap the rows in a 'data' object for the frontend
-        res.json({ success: true, data: rows }); 
+        const [rows] = await pool.query(sql + ' ORDER BY created_at DESC', params);
+        res.json({ success: true, data: rows });
     } catch (err) {
-        console.error("Backend GET Error:", err);
-        res.status(500).json({ success: false, error: err.message });
+        res.status(500).json({ success: false, error: "Failed to fetch policies" });
     }
 });
 
@@ -127,38 +121,6 @@ app.post('/api/policies/remind', async (req, res) => {
         res.json({ success: true, message: "Reminder sent!" });
     } catch (err) {
         res.status(500).json({ success: false, error: "Failed to send reminder" });
-    }
-});
-
-
-// Add this exact block to your server.js
-app.post('/api/employees', async (req, res) => {
-    const { username, password } = req.body;
-    try {
-        // Use your database pool to insert the new staff member
-        await pool.query(
-            'INSERT INTO users (username, password, role) VALUES (?, ?, "employee")', 
-            [username, password]
-        );
-        res.json({ success: true, message: 'Employee added successfully' });
-    } catch (err) {
-        console.error(err);
-        res.status(500).json({ success: false, error: "Could not add employee. Username might be taken." });
-    }
-});
-
-
-// Manual SMS Reminder Route
-app.post('/api/remind-client', async (req, res) => {
-    const { phone, clientName, policyNumber } = req.body;
-    
-    const message = `Unlimited Funeral Services: Dear ${clientName}, this is a friendly reminder to settle your payment for policy ${policyNumber}. Thank you.`;
-
-    try {
-        await sendSMS(phone, message);
-        res.json({ success: true, message: "Reminder sent!" });
-    } catch (err) {
-        res.status(500).json({ success: false, error: "SMS failed to send." });
     }
 });
 
