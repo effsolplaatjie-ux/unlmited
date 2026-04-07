@@ -8,8 +8,25 @@ const PDFDocument = require('pdfkit');
 const app = express();
 
 // --- 1. SECURITY & CORS ---
-app.use(cors({ origin: '*', methods: ['GET', 'POST', 'PUT', 'DELETE'], allowedHeaders: ['Content-Type'] }));
-app.use(express.json());
+// --- IMPROVED CORS FIX ---
+const allowedOrigins = ['https://jovial-moonbeam-d731d5.netlify.app', 'http://127.0.0.1:5500'];
+
+app.use(cors({
+    origin: function (origin, callback) {
+        // allow requests with no origin (like mobile apps or curl requests)
+        if (!origin) return callback(null, true);
+        if (allowedOrigins.indexOf(origin) === -1) {
+            return callback(new Error('CORS Policy Error'), false);
+        }
+        return callback(null, true);
+    },
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization'],
+    credentials: true
+}));
+
+// Manually handle preflight OPTIONS requests
+app.options('*', cors());
 
 // --- 2. DATABASE ---
 const pool = mysql.createPool({
