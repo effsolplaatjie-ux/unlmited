@@ -1,124 +1,114 @@
+require('dotenv').config();
 const express = require('express');
 const mysql = require('mysql2/promise');
 const cors = require('cors');
 const twilio = require('twilio');
-require('dotenv').config();
 
 const app = express();
 
-// --- 1. ROBUST CORS (Fixes pre-flight errors) ---
+// --- 1. ROBUST CORS CONFIGURATION ---
+// This fixes the "No Access-Control-Allow-Origin" error
 app.use(cors({
-    origin: '*', // Allows access from Netlify and local files
+    origin: '*', 
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization']
 }));
 
 app.use(express.json());
 
-// --- 2. DATABASE TEST (Checks for connection errors in Render logs) ---
+// --- 2. DATABASE POOL WITH ERROR LOGGING ---
+// Status 1 crashes often happen here if DB credentials are wrong
 const pool = mysql.createPool({
     host: process.env.DB_HOST,
     user: process.env.DB_USER,
     password: process.env.DB_PASSWORD,
     database: process.env.DB_NAME,
     port: process.env.DB_PORT || 4000,
-    ssl: { rejectUnauthorized: false },
-    enableKeepAlive: true
+    ssl: { rejectUnauthorized: false }, 
+    enableKeepAlive: true,
+    waitForConnections: true,
+    connectionLimit: 10
 });
 
-pool.query('SELECT 1').then(() => console.log("✅ Database Connected")).catch(err => console.error("❌ DB Error:", err.message));
+// Immediate connection test to catch errors early in Render logs
+pool.getConnection()
+    .then(conn => {
+        console.log("✅ Database Connected Successfully");
+        conn.release();
+    })
+    .catch(err => {
+        console.error("❌ DATABASE CONNECTION FAILED:", err.message);
+    });
 
 const twilioClient = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
 
-// --- 3. LOGIN & STAFF ---
+// --- 3. UPDATED ROUTES WITH TRY/CATCH ---
+
+// Login Route
 app.post('/api/login', async (req, res) => {
     const { username, password } = req.body;
     try {
         const [rows] = await pool.query('SELECT id, username, role FROM users WHERE username = ? AND password = ?', [username, password]);
         if (rows.length > 0) return res.json({ success: true, user: rows[0] });
         res.status(401).json({ success: false, message: 'Invalid credentials' });
-    } catch (err) { res.status(500).json({ success: false, error: "Database error" }); }
+    } catch (err) {
+        console.error("Login Error:", err);
+        res.status(500).json({ success: false, error: "Internal Server Error" });
+    }
 });
 
-app.post('/api/employees', async (req, res) => {
-    const { username, password } = req.body;
-    try {
-        await pool.query('INSERT INTO users (username, password, role) VALUES (?, ?, "employee")', [username, password]);
-        res.json({ success: true });
-    } catch (err) { res.status(500).json({ success: false, error: "Username already exists" }); }
-});
-
-// --- 4. POLICIES & SMS ---
+// Create Policy + SMS
+// Fixes the 500 errors by adding detailed logging
 app.post('/api/policies', async (req, res) => {
     const { client_name, client_phone, insurance_type } = req.body;
     const policy_number = `UFS-${Date.now()}`;
     try {
-        await pool.query('INSERT INTO policies (policy_number, client_name, client_phone, insurance_type, status) VALUES (?, ?, ?, ?, "unpaid")', 
+        await pool.query('INSERT INTO policies (policy_number, client_name, client_phone, insurance_type) VALUES (?, ?, ?, ?)', 
             [policy_number, client_name, client_phone, insurance_type]);
         
-        const message = `UFS: Hello ${client_name}, your ${insurance_type} policy is active. Policy No: ${policy_number}. Status: UNPAID. Please settle your account.`;
-        await twilioClient.messages.create({ body: message, from: process.env.TWILIO_PHONE_NUMBER, to: client_phone });
-        
-        res.json({ success: true, policy_number });
-    } catch (err) { res.status(500).json({ success: false, error: "Policy saved, but SMS failed." }); }
-});
-
-app.get('/api/policies', async (req, res) => {
-    const { search } = req.query;
-    try {
-        let sql = 'SELECT * FROM policies';
-        let params = [];
-        if (search) {
-            sql += ' WHERE policy_number LIKE ? OR client_name LIKE ?';
-            params = [`%${search}%`, `%${search}%`];
+        try {
+            await twilioClient.messages.create({
+                body: `UFS: Hello ${client_name}, your policy is active. No: ${policy_number}`,
+                from: process.env.TWILIO_PHONE_NUMBER,
+                to: client_phone
+            });
+        } catch (smsErr) {
+            console.error("Twilio SMS failed but policy was saved:", smsErr.message);
         }
-        const [rows] = await pool.query(sql + ' ORDER BY created_at DESC', params);
-        res.json({ success: true, data: rows });
-    } catch (err) { res.status(500).json({ success: false, error: "Error fetching data" }); }
+
+        res.json({ success: true, policy_number });
+    } catch (err) {
+        console.error("Policy Creation Error:", err);
+        res.status(500).json({ success: false, error: err.message });
+    }
 });
 
-app.put('/api/policies/:id/status', async (req, res) => {
-    const { status } = req.body;
-    try {
-        await pool.query('UPDATE policies SET status = ? WHERE id = ?', [status, req.params.id]);
-        res.json({ success: true });
-    } catch (err) { res.status(500).json({ success: false, error: "Update failed" }); }
-});
-
+// Manual Payment Reminder
 app.post('/api/policies/remind', async (req, res) => {
     const { phone, name } = req.body;
     try {
         await twilioClient.messages.create({
-            body: `UFS Reminder: Dear ${name}, please settle your policy payment to stay covered. Thank you.`,
+            body: `UFS Reminder: Dear ${name}, please settle your policy payment to stay covered.`,
             from: process.env.TWILIO_PHONE_NUMBER,
             to: phone
         });
         res.json({ success: true });
-    } catch (err) { res.status(500).json({ success: false, error: "SMS Error" }); }
+    } catch (err) {
+        console.error("Reminder SMS Error:", err);
+        res.status(500).json({ success: false, error: "Failed to send SMS" });
+    }
 });
 
-// --- 5. PDF CERTIFICATE ROUTE ---
-app.get('/api/policies/:id/certificate', async (req, res) => {
+// Get Policies
+app.get('/api/policies', async (req, res) => {
     try {
-        const [rows] = await pool.query('SELECT * FROM policies WHERE id = ?', [req.params.id]);
-        if (rows.length === 0) return res.status(404).send("Policy not found");
-        const p = rows[0];
-
-        const doc = new PDFDocument();
-        res.setHeader('Content-Type', 'application/pdf');
-        res.setHeader('Content-Disposition', `attachment; filename=UFS_${p.policy_number}.pdf`);
-        doc.pipe(res);
-
-        doc.fontSize(25).text('UNLIMITED FUNERAL SERVICES', { align: 'center' });
-        doc.moveDown().fontSize(18).text('POLICY CERTIFICATE', { align: 'center' });
-        doc.moveDown().fontSize(12);
-        doc.text(`Policy Number: ${p.policy_number}`);
-        doc.text(`Client Name: ${p.client_name}`);
-        doc.text(`Insurance Type: ${p.insurance_type}`);
-        doc.text(`Status: ${p.status.toUpperCase()}`);
-        doc.text(`Issue Date: ${new Date(p.created_at).toLocaleDateString()}`);
-        doc.end();
-    } catch (err) { res.status(500).send("PDF Error"); }
+        const [rows] = await pool.query('SELECT * FROM policies ORDER BY created_at DESC');
+        res.json({ success: true, data: rows });
+    } catch (err) {
+        console.error("Fetch Policies Error:", err);
+        res.status(500).json({ success: false, error: "Database error" });
+    }
 });
 
-app.listen(process.env.PORT || 3000, () => console.log("UFS Backend Active"));
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => console.log(`🚀 Server Running on port ${PORT}`));
