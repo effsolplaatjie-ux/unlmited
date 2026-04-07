@@ -1,34 +1,21 @@
-require('dotenv').config();
 const express = require('express');
 const mysql = require('mysql2/promise');
 const cors = require('cors');
 const twilio = require('twilio');
-const PDFDocument = require('pdfkit');
+require('dotenv').config();
 
 const app = express();
 
-// --- 1. SECURITY & CORS ---
-// --- IMPROVED CORS FIX ---
-const allowedOrigins = ['https://jovial-moonbeam-d731d5.netlify.app', 'http://127.0.0.1:5500'];
-
+// --- 1. ROBUST CORS (Fixes pre-flight errors) ---
 app.use(cors({
-    origin: function (origin, callback) {
-        // allow requests with no origin (like mobile apps or curl requests)
-        if (!origin) return callback(null, true);
-        if (allowedOrigins.indexOf(origin) === -1) {
-            return callback(new Error('CORS Policy Error'), false);
-        }
-        return callback(null, true);
-    },
+    origin: '*', // Allows access from Netlify and local files
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization'],
-    credentials: true
+    allowedHeaders: ['Content-Type', 'Authorization']
 }));
 
-// Manually handle preflight OPTIONS requests
-app.options('*', cors());
+app.use(express.json());
 
-// --- 2. DATABASE ---
+// --- 2. DATABASE TEST (Checks for connection errors in Render logs) ---
 const pool = mysql.createPool({
     host: process.env.DB_HOST,
     user: process.env.DB_USER,
@@ -38,6 +25,8 @@ const pool = mysql.createPool({
     ssl: { rejectUnauthorized: false },
     enableKeepAlive: true
 });
+
+pool.query('SELECT 1').then(() => console.log("✅ Database Connected")).catch(err => console.error("❌ DB Error:", err.message));
 
 const twilioClient = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
 
