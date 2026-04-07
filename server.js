@@ -141,6 +141,21 @@ app.post('/api/employees', async (req, res) => {
     }
 });
 
+
+// Manual SMS Reminder Route
+app.post('/api/remind-client', async (req, res) => {
+    const { phone, clientName, policyNumber } = req.body;
+    
+    const message = `Unlimited Funeral Services: Dear ${clientName}, this is a friendly reminder to settle your payment for policy ${policyNumber}. Thank you.`;
+
+    try {
+        await sendSMS(phone, message);
+        res.json({ success: true, message: "Reminder sent!" });
+    } catch (err) {
+        res.status(500).json({ success: false, error: "SMS failed to send." });
+    }
+});
+
 app.put('/api/policies/:id/status', async (req, res) => {
     const { status } = req.body;
     try {
