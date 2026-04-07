@@ -124,6 +124,23 @@ app.post('/api/policies/remind', async (req, res) => {
     }
 });
 
+
+// Add this exact block to your server.js
+app.post('/api/employees', async (req, res) => {
+    const { username, password } = req.body;
+    try {
+        // Use your database pool to insert the new staff member
+        await pool.query(
+            'INSERT INTO users (username, password, role) VALUES (?, ?, "employee")', 
+            [username, password]
+        );
+        res.json({ success: true, message: 'Employee added successfully' });
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ success: false, error: "Could not add employee. Username might be taken." });
+    }
+});
+
 app.put('/api/policies/:id/status', async (req, res) => {
     const { status } = req.body;
     try {
