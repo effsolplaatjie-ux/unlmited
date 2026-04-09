@@ -83,10 +83,13 @@ app.post('/api/policies', async (req, res) => {
     }
 });
 
-// Manual Payment Reminder
+// --- UPDATED: PAYMENT REMINDER (Fixes 500 Error) ---
 app.post('/api/policies/remind', async (req, res) => {
     const { phone, name } = req.body;
     try {
+        // Validation to prevent crash if data is missing
+        if (!phone) return res.status(400).json({ success: false, error: "Phone number is required" });
+
         await twilioClient.messages.create({
             body: `UFS Reminder: Dear ${name}, please settle your policy payment to stay covered.`,
             from: process.env.TWILIO_PHONE_NUMBER,
@@ -94,8 +97,8 @@ app.post('/api/policies/remind', async (req, res) => {
         });
         res.json({ success: true });
     } catch (err) {
-        console.error("Reminder SMS Error:", err);
-        res.status(500).json({ success: false, error: "Failed to send SMS" });
+        console.error("SMS Error:", err.message);
+        res.status(500).json({ success: false, error: "Twilio Error: Check your credentials and phone format" });
     }
 });
 
@@ -133,6 +136,20 @@ app.get('/api/policies/:id/certificate', async (req, res) => {
         doc.end();
     } catch (err) { res.status(500).send(err.message); }
 });
+
+// --- NEW: ADD EMPLOYEES ROUTE (Fixes 404 Error) ---
+app.post('/api/employees', async (req, res) => {
+    const { username, password } = req.body;
+    try {
+        await pool.query('INSERT INTO users (username, password, role) VALUES (?, ?, "employee")', [username, password]);
+        res.json({ success: true });
+    } catch (err) {
+        console.error("Employee Creation Error:", err);
+        res.status(500).json({ success: false, error: "Username already exists or database error" });
+    }
+});
+
+
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`🚀 Server Running on port ${PORT}`));
