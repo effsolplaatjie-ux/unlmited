@@ -6,13 +6,11 @@ const twilio = require('twilio');
 
 const app = express();
 
-// --- 1. ROBUST CORS CONFIGURATION ---
-// --- FIXED CORS CONFIGURATION ---
+/// --- ALLOW ALL ORIGINS TO FIX CORS PERMANENTLY ---
 app.use(cors({
-    origin: ['https://jovial-moonbeam-d731d5.netlify.app', 'http://127.0.0.1:5500'],
+    origin: '*', 
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization'],
-    credentials: true
+    allowedHeaders: ['Content-Type', 'Authorization']
 }));
 
 app.use(express.json());
