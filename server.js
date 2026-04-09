@@ -100,15 +100,12 @@ app.post('/api/policies/remind', async (req, res) => {
     }
 });
 
-// Get Policies
+// Get All Policies
 app.get('/api/policies', async (req, res) => {
     try {
         const [rows] = await pool.query('SELECT * FROM policies ORDER BY created_at DESC');
         res.json({ success: true, data: rows });
-    } catch (err) {
-        console.error("Fetch Policies Error:", err);
-        res.status(500).json({ success: false, error: "Database error" });
-    }
+    } catch (err) { res.status(500).json({ success: false, error: "Database error" }); }
 });
 
 // Fetch Policies Route
@@ -119,6 +116,23 @@ app.get('/api/policies', async (req, res) => {
     } catch (err) {
         res.status(500).json({ success: false, error: err.message });
     }
+});
+
+// PDF Certificate
+app.get('/api/policies/:id/certificate', async (req, res) => {
+    try {
+        const [rows] = await pool.query('SELECT * FROM policies WHERE id = ?', [req.params.id]);
+        if (rows.length === 0) return res.status(404).send('Policy not found');
+        const p = rows[0];
+
+        const doc = new PDFDocument();
+        res.setHeader('Content-Type', 'application/pdf');
+        res.setHeader('Content-Disposition', `attachment; filename=${p.policy_number}.pdf`);
+        doc.pipe(res);
+        doc.fontSize(25).text('Policy Certificate', { align: 'center' });
+        doc.moveDown().fontSize(14).text(`Policy Number: ${p.policy_number}\nClient: ${p.client_name}\nType: ${p.insurance_type}`);
+        doc.end();
+    } catch (err) { res.status(500).send(err.message); }
 });
 
 const PORT = process.env.PORT || 3000;
