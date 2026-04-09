@@ -3,6 +3,7 @@ const express = require('express');
 const mysql = require('mysql2/promise');
 const cors = require('cors');
 const twilio = require('twilio');
+const PDFDocument = require('pdfkit'); // <--- ENSURE THIS LINE IS HERE
 
 const app = express();
 
