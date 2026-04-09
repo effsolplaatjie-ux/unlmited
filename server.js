@@ -7,11 +7,12 @@ const twilio = require('twilio');
 const app = express();
 
 // --- 1. ROBUST CORS CONFIGURATION ---
-// This fixes the "No Access-Control-Allow-Origin" error
+// --- FIXED CORS CONFIGURATION ---
 app.use(cors({
-    origin: '*', 
+    origin: ['https://jovial-moonbeam-d731d5.netlify.app', 'http://127.0.0.1:5500'],
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization']
+    allowedHeaders: ['Content-Type', 'Authorization'],
+    credentials: true
 }));
 
 app.use(express.json());
@@ -107,6 +108,16 @@ app.get('/api/policies', async (req, res) => {
     } catch (err) {
         console.error("Fetch Policies Error:", err);
         res.status(500).json({ success: false, error: "Database error" });
+    }
+});
+
+// Fetch Policies Route
+app.get('/api/policies', async (req, res) => {
+    try {
+        const [rows] = await pool.query('SELECT * FROM policies ORDER BY created_at DESC');
+        res.json({ success: true, data: rows });
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
     }
 });
 
